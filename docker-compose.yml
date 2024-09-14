@@ -24,3 +24,34 @@ services:
       - PYTHONUNBUFFERED=1
       - PINECONE_API_KEY=faec4084-0024-486f-bcf8-3ca6f74bb688
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--reload"]
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
+        
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_volume:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama-pull:
+    image: genai-stack/pull-model:latest
+    build:
+      context: .
+      dockerfile: pull_model.Dockerfile
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - LLM=${LLM}
+    networks:
+      - net
+    tty: true
+volumes:
+  ollama_volume:
