@@ -1,11 +1,13 @@
-FROM python:3.12-alpine
+FROM python:3.12-slim-bullseye
 
 WORKDIR /app
 
 COPY ./requirements.txt requirements.txt
 
-RUN curl -fsSL https://ollama.com/install.sh | sh
-RUN ollama pull llama3.1
+# RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# RUN ollama pull llama3.1
+
 RUN pip install --upgrade -r requirements.txt
 
 COPY ./app /app

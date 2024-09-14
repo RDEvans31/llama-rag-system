@@ -1,13 +1,14 @@
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import json
+from dotenv import load_dotenv
 from fastapi import  FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import logging
 from uuid import uuid4
 from typing import Any
 import io
 import os
 import time
+import tempfile
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import OllamaEmbeddings
@@ -24,28 +25,37 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_community.chat_message_histories import SQLChatMessageHistory
 from langchain_core.runnables import Runnable
 
+load_dotenv(".env")
 
-from langchain_community.retrievers import PubMedRetriever
+ollama_base_url = os.getenv("OLLAMA_BASE_URL")
+
+print(ollama_base_url)
 
 def get_session_history(session_id):
-    return SQLChatMessageHistory(session_id, "sqlite:///memory.db")
+    return SQLChatMessageHistory(session_id, "sqlite+aiosqlite:///memory.db", async_mode=True)
 
+logger = logging.getLogger("uvicorn")
 MODEL = "llama3.1"
 # MODEL = "gemma:2b"
 INDEX_NAME = "nomadic-llama"
-UPLOAD_DIR = "uploads/"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 model = ChatOllama(model=MODEL, temperature=0)
+
 embeddings = OllamaEmbeddings(model=MODEL)
-logger = logging.getLogger("uvicorn")
+
+os.environ["PINECONE_API_KEY"] = "faec4084-0024-486f-bcf8-3ca6f74bb688"
 
 pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-
-session_histories = {}
+existing_indexes = [index_info["name"] for index_info in pc.list_indexes()]
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-existing_indexes = [index_info["name"] for index_info in pc.list_indexes()]
 
 
 @app.get("/")
@@ -63,75 +73,81 @@ async def upload_file(file: UploadFile = File(...)) -> Any:
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type.")
     
-    file_location = f"{UPLOAD_DIR}{file.filename}"
-    with io.open(file_location, 'wb') as out_file:
-        content = await file.read()  # Read file content
-        out_file.write(content)  # Save file locally
-
-
-    loader = PyPDFLoader(file_location)
+    content = await file.read()
     
-    logger.info(f"Starting to load {file_location} into memory")
 
-    pages = loader.load()
+    # with io.open(file_location, 'wb') as out_file:
+    #     content = await file.read()  # Read file content
+    #     out_file.write(content)  # Save file locally
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=300)
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".pdf") as temp_file:
 
-    chunks = splitter.split_documents(pages)
+        temp_file.write(content)
+        temp_file.flush() 
 
-    if INDEX_NAME not in existing_indexes:
-        pc.create_index(
+        loader = PyPDFLoader(temp_file.name)
+        
+        logger.info(f"Starting to load {file.filename} into memory")
 
-        name=INDEX_NAME,
+        pages = loader.load()
 
-        dimension=4096, # Replace with your model dimensions
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=300)
 
-        metric="cosine", # Replace with your model metric
+        chunks = splitter.split_documents(pages)
 
-        spec=ServerlessSpec(
+        if INDEX_NAME not in existing_indexes:
+            pc.create_index(
 
-            cloud="aws",
+            name=INDEX_NAME,
 
-            region="us-east-1"
+            dimension=4096, # Replace with your model dimensions
 
-        ) 
-    )
-    while not pc.describe_index(INDEX_NAME).status["ready"]:
-        time.sleep(1)
+            metric="cosine", # Replace with your model metric
 
-    vectorstore: PineconeVectorStore = PineconeVectorStore.from_existing_index(index_name=INDEX_NAME, embedding=embeddings)
+            spec=ServerlessSpec(
 
-    logger.info(f"Index {INDEX_NAME} ready.")
+                cloud="aws",
 
-    logger.info(f"Embeddings generated.")
+                region="us-east-1"
 
-    message = 'Successfully uploaded.'
+            ) 
+        )
+        while not pc.describe_index(INDEX_NAME).status["ready"]:
+            time.sleep(1)
 
-    try:
-        logger.info(f"Starting to upsert {len(chunks)} chunks into Pinecone index: {INDEX_NAME}")
+        vectorstore: PineconeVectorStore = PineconeVectorStore.from_existing_index(index_name=INDEX_NAME, embedding=embeddings)
 
-        # await async_process_chunks_in_batches(chunks, embeddings)
-        number_of_batches = len(chunks)//10
-        if len(chunks) % 10 != 0:
-            number_of_batches += 1
+        logger.info(f"Index {INDEX_NAME} ready.")
 
-        # vectorstore = PineconeVectorStore.from_documents(chunks, embeddings, index_name=INDEX_NAME)    
+        logger.info(f"Embeddings generated.")
 
-        for batch_num, i in enumerate(range(0, len(chunks), 10), start=1):
-            batch = chunks[i:i+10]
-            logger.info(f"Upserting batch {batch_num}/{number_of_batches} into Pinecone index: {INDEX_NAME}")
-            vectorstore.add_documents(batch)
-            
+        message = 'Successfully uploaded.'
 
-        logger.info(f"Successfully upserted {len(chunks)} chunks into Pinecone index: {INDEX_NAME}")
+        try:
+            logger.info(f"Starting to upsert {len(chunks)} chunks into Pinecone index: {INDEX_NAME}")
 
-    except Exception as e:
-        logger.error(f"Error during upsert operation: {str(e)}")
+            # await async_process_chunks_in_batches(chunks, embeddings)
+            number_of_batches = len(chunks)//10
+            if len(chunks) % 10 != 0:
+                number_of_batches += 1
 
-        message = f"Error during upsert operation: {str(e)}"
+            # vectorstore = PineconeVectorStore.from_documents(chunks, embeddings, index_name=INDEX_NAME)    
 
-    finally:
-        logger.info(f"Upsert operation completed for Pinecone index: {INDEX_NAME}")
+            for batch_num, i in enumerate(range(0, len(chunks), 10), start=1):
+                batch = chunks[i:i+10]
+                logger.info(f"Upserting batch {batch_num}/{number_of_batches} into Pinecone index: {INDEX_NAME}")
+                vectorstore.add_documents(batch)
+                
+
+            logger.info(f"Successfully upserted {len(chunks)} chunks into Pinecone index: {INDEX_NAME}")
+
+        except Exception as e:
+            logger.error(f"Error during upsert operation: {str(e)}")
+
+            message = f"Error during upsert operation: {str(e)}"
+
+        finally:
+            logger.info(f"Upsert operation completed for Pinecone index: {INDEX_NAME}")
     
     return {"message": message}
 
@@ -143,7 +159,6 @@ async def search(session_id: str , query: str) -> Any:
     template = """
             You are an expert assistant answering questions based on the provided context.
 
-            Answer the question directly and concisely.
             If the question is asking for guidance, provide implementation details.
             If the context doesn’t contain enough information, say "I don't know."
 
@@ -165,7 +180,7 @@ async def search(session_id: str , query: str) -> Any:
     rag_chain: Runnable = create_retrieval_chain(retriever, qa_chain)
 
     chain_with_history = RunnableWithMessageHistory(rag_chain, get_session_history, input_messages_key="question", history_messages_key="history")
-    response = await chain_with_history.invoke({'input': query}, config={"configurable": {"session_id": session_id}})
+    response = await chain_with_history.ainvoke({'input': query}, config={"configurable": {"session_id": session_id}})
 
     # serialise the context
     context = response["context"]

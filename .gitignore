@@ -1,2 +1,3 @@
 *.pyc
-/rag-system
+.venv
+memory.db
