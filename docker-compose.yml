@@ -1,16 +1,6 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  next-app:
-    container_name: next-app
-    build: ./next-app
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./next-app:/app
-    command: npm run dev
-    environment:
-      NODE_ENV: development
   python-api:
     container_name: python-api
     volumes:
@@ -22,36 +12,10 @@ services:
       - "80:80"
     environment:
       - PYTHONUNBUFFERED=1
-      - PINECONE_API_KEY=faec4084-0024-486f-bcf8-3ca6f74bb688
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--reload"]
-    depends_on:
-      ollama-pull:
-        condition: service_completed_successfully
-        
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_volume:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  ollama-pull:
-    image: genai-stack/pull-model:latest
-    build:
-      context: .
-      dockerfile: pull_model.Dockerfile
-    environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - LLM=${LLM}
+    command: ["fastapi", "run", "app/main.py", "--port", "80"]
     networks:
       - net
-    tty: true
-volumes:
-  ollama_volume:
+
+networks:
+  net:
+    driver: bridge

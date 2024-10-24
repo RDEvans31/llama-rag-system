@@ -1,33 +1,52 @@
+import json
 from dotenv import load_dotenv
-load_dotenv()
-import os
-import tempfile
-import time
-from fastapi import  FastAPI, File, HTTPException, UploadFile
+from fastapi import  FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+from uuid import uuid4
 from typing import Any
-from langchain.prompts import PromptTemplate
-from pinecone import Pinecone, ServerlessSpec
-from langchain_pinecone import PineconeVectorStore
+import io
+import os
+import time
+import tempfile
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from app.llm.hugging_face_inference_llama3_2 import HuggingFaceInference
-from langchain_huggingface.embeddings import HuggingFaceEndpointEmbeddings
+from langchain_pinecone import PineconeVectorStore
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from pinecone import Pinecone, ServerlessSpec
+from langchain_ollama import ChatOllama
 from langchain_core.output_parsers import StrOutputParser
-from langchain.chains.retrieval import create_retrieval_chain
+from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTemplate
+from operator import itemgetter
+from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_community.chat_message_histories import SQLChatMessageHistory
+from langchain_core.runnables import Runnable
+from app.llm.hugging_face_inference_llama3_2 import HuggingFaceInference
 
+# load_dotenv(".env")
+
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", 'http://127.0.0.1:11434') 
+MODEL = os.getenv("LLM", 'llama3.2')
 INDEX_NAME = os.getenv("PINECONE_INDEX", 'nomadic-llama')
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-HUGGINGFACEHUB_API_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+
+
+def get_session_history(session_id):
+    return SQLChatMessageHistory(session_id, "sqlite+aiosqlite:///memory.db", async_mode=True)
+
 logger = logging.getLogger("uvicorn")
 
+print(MODEL, OLLAMA_URL, INDEX_NAME)
+
+# model = ChatOllama(base_url=OLLAMA_URL,model=MODEL, temperature=0)
 model = HuggingFaceInference()
-embeddings = HuggingFaceEndpointEmbeddings(model='sentence-transformers/all-MiniLM-L6-v2')
-# embeddings = OllamaEmbeddings(base_url='http://127.0.0.1:11434',model='llama3.2')
-pc = Pinecone(api_key=PINECONE_API_KEY)
-parser = StrOutputParser()
+
+embeddings = OllamaEmbeddings(base_url=OLLAMA_URL,model=MODEL)
+
+os.environ["PINECONE_API_KEY"] = "faec4084-0024-486f-bcf8-3ca6f74bb688"
+
+pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
 existing_indexes = [index_info["name"] for index_info in pc.list_indexes()]
 
 app = FastAPI()
@@ -38,6 +57,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 @app.get("/")
 def hello_world():
@@ -55,7 +76,7 @@ async def upload_file(file: UploadFile = File(...)) -> Any:
         raise HTTPException(status_code=400, detail="Invalid file type.")
     
     content = await file.read()
-    file_name = file.filename
+    
 
     # with io.open(file_location, 'wb') as out_file:
     #     content = await file.read()  # Read file content
@@ -68,7 +89,7 @@ async def upload_file(file: UploadFile = File(...)) -> Any:
 
         loader = PyPDFLoader(temp_file.name)
         
-        logger.info(f"Starting to load {file_name} into memory")
+        logger.info(f"Starting to load {file.filename} into memory")
 
         pages = loader.load()
 
@@ -81,7 +102,7 @@ async def upload_file(file: UploadFile = File(...)) -> Any:
 
             name=INDEX_NAME,
 
-            dimension=384, 
+            dimension=4096, # Replace with your model dimensions
 
             metric="cosine", # Replace with your model metric
 
@@ -131,11 +152,9 @@ async def upload_file(file: UploadFile = File(...)) -> Any:
     
     return {"message": message}
 
-
 @app.get("/query")
 async def test_llm(query: str) -> Any:
-    vectorstore: PineconeVectorStore = PineconeVectorStore.from_existing_index(index_name=INDEX_NAME, embedding=embeddings)
-    retriever = vectorstore.as_retriever()
+
     template = """
             You are an expert assistant owned and run by NomadicLifter.
 
@@ -143,26 +162,73 @@ async def test_llm(query: str) -> Any:
 
             If the question is asking for guidance, provide implementation details.
 
+            Question: {question}
+        """
+    prompt = PromptTemplate.from_template(template)
+    chain = {"question": itemgetter("question")} | prompt | model
+    answer = await chain.ainvoke({'question': query})
+    return {
+        "answer": answer
+    }
+
+@app.get("/search")
+async def search(session_id: str , query: str) -> Any:
+    vectorstore: PineconeVectorStore = PineconeVectorStore.from_existing_index(index_name=INDEX_NAME, embedding=embeddings)
+    retriever = vectorstore.as_retriever()
+
+    template = """
+            You are an expert assistant answering questions based on the provided context.
+
+            If the question is asking for guidance, provide implementation details.
+            If the context doesn’t contain enough information, say "I don't know."
+
             Context: {context}
 
             Question: {input}
         """
-    prompt = PromptTemplate.from_template(template)
-    # chain = (
+    
+    template = """
+            You are an expert assistant at answering questions.
+
+            If the question is asking for guidance, provide implementation details.
+
+            Question: {input}
+        """
+
+    prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", template),
+        MessagesPlaceholder("history"),
+        ("human", "{input}"),
+    ]
+    )
+
+    # qa_chain = create_stuff_documents_chain(model,prompt)
+
+    # rag_chain: Runnable = create_retrieval_chain(retriever, qa_chain)
+
+    # chain_with_history = RunnableWithMessageHistory(qa_chain, get_session_history, input_messages_key="question", history_messages_key="history")
+    # response = await chain_with_history.ainvoke({'input': query}, config={"configurable": {"session_id": session_id}})
+    response = model.invoke(query)
+
+
+    # serialise the context
+    # context = response["context"]
+
+    # serialized_docs = [
     #     {
-    #         "context": itemgetter("question") | retriever,
-    #         "question": itemgetter("question"),
+    #         "metadata": doc.metadata,
+    #         "page_content": doc.page_content
     #     }
-    #     | prompt
-    #     | model
-    #     | parser
-    # )
-    question_answer_chain = create_stuff_documents_chain(model, prompt)
-    rag_chain = create_retrieval_chain(retriever, question_answer_chain)
-    response = await rag_chain.ainvoke({'input': query})
+    #     for doc in context
+    # ]
+
     return {
-        "answer": response["answer"],
-        "context": response["context"]
+        "session_id": session_id,
+        "answer": response
+
+        # "answer": response["answer"]
+        # "context": json.dumps(serialized_docs, indent=4),
     }
 
 

@@ -1,0 +1,82 @@
+version: "3.8"
+
+services:
+  python-api:
+    container_name: python-api
+    volumes:
+      - ./python-api/app:/app
+    build:
+      context: ./python-api
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PINECONE_API_KEY=faec4084-0024-486f-bcf8-3ca6f74bb688
+      - LLM=llama3.2:latest
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - PINECONE_INDEX=nomadic-llama-small
+    command:
+      ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--reload"]
+    # depends_on:
+    #   ollama-pull:
+    #     condition: service_completed_successfully
+    networks:
+      - net
+
+  weaviate:
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --scheme
+      - http
+    image: cr.weaviate.io/semitechnologies/weaviate:1.27.0
+    ports:
+      - 8080:8080
+      - 50051:50051
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    restart: on-failure:0
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      ENABLE_API_BASED_MODULES: "true"
+      CLUSTER_HOSTNAME: "node1"
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_volume:/root/.ollama
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    networks:
+      - net
+
+  # ollama-pull:
+  #   image: genai-stack/pull-model:latest
+  #   build:
+  #     context: .
+  #     dockerfile: pull_model.Dockerfile
+  #   environment:
+  #     - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+  #     - LLM=${LLM}
+  #   networks:
+  #     - net
+  #   tty: true
+
+volumes:
+  ollama_volume:
+networks:
+  net:
+    driver: bridge
