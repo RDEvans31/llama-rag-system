@@ -6,8 +6,6 @@ WORKDIR /dir
 
 COPY ./requirements.txt /dir/requirements.txt
 
-COPY ./.env /dir/.env
-
 RUN pip install --no-cache-dir --upgrade -r /dir/requirements.txt
 
 COPY ./app /dir/app

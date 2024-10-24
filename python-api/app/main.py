@@ -137,7 +137,7 @@ async def test_llm(query: str) -> Any:
     vectorstore: PineconeVectorStore = PineconeVectorStore.from_existing_index(index_name=INDEX_NAME, embedding=embeddings)
     retriever = vectorstore.as_retriever()
     template = """
-            You are an expert assistant owned and run by NomadicLifter.
+            You are an AI system running on Llama3.2 language model. You are owned and run by NomadicLifter.
 
             You are an expert on answering questions on life, health, fitness, and tech, using context if available.
 

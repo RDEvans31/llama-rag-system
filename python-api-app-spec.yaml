@@ -1,0 +1,38 @@
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+envs:
+  - key: PINECONE_INDEX
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+    value: EV[1:P6zlB1FDYqNMm1N48QShzPoYN3GqY28Y:u00+aVnPoOb2AmwaXX+ns4/T2A4xVRKUTlW2pB0=]
+  - key: PINECONE_API_KEY
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+    value: EV[1:YYn3UqLeg6x4zYjp1UVFxwReSlf+kP/7:Q7I+Qe0UP7nrUpHA7aC43q/sSKAWuE5Y221CaWLE+vEMKMLoabp0h0+Ae1h/5Djunbqugw==]
+  - key: HUGGINGFACEHUB_API_TOKEN
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+    value: EV[1:1UrZ/RXi918/Q8CXLXnHssoD4yVwYuMk:25hCdyTcT0AfpPEo19dtKTCSgsREqAMu4o+4qkq804z8e2Z0n+uqX8GF1goYZlGlca44zms=]
+features:
+  - buildpack-stack=ubuntu-22
+ingress:
+  rules:
+    - component:
+        name: llama-rag-system-python-api
+      match:
+        path:
+          prefix: /
+name: nomadi-lifter-ai
+region: lon
+services:
+  - dockerfile_path: python-api/Dockerfile
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: RDEvans31/llama-rag-system
+    http_port: 80
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    name: llama-rag-system-python-api
+    source_dir: python-api

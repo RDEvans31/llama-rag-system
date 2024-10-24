@@ -12,6 +12,9 @@ services:
       - "80:80"
     environment:
       - PYTHONUNBUFFERED=1
+      - PINECONE_INDEX=index_name
+      - PINECONE_API_KEY=api_key
+      - HUGGINGFACEHUB_API_TOKEN=token
     command: ["fastapi", "run", "app/main.py", "--port", "80"]
     networks:
       - net
