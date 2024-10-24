@@ -1,20 +1,16 @@
-FROM python:3.12-slim-bullseye
+FROM python:3.11-slim-bullseye
 
-WORKDIR /app
 
-COPY ./requirements.txt requirements.txt
+WORKDIR /dir
 
-# RUN curl -fsSL https://ollama.com/install.sh | sh
 
-# RUN ollama pull llama3.1
+COPY ./requirements.txt /dir/requirements.txt
 
-RUN pip install --upgrade -r requirements.txt
+COPY ./.env /dir/.env
 
-COPY ./app /app
+RUN pip install --no-cache-dir --upgrade -r /dir/requirements.txt
 
-EXPOSE 80
+COPY ./app /dir/app
 
-#can ignore deprecation warnings as long as there are no errors
-# RUN pytest -W ignore::DeprecationWarning
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--reload"]
+CMD ["fastapi", "run", "app/main.py", "--port", "80"]
