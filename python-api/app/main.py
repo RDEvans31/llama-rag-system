@@ -1,5 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv()
 import os
 import tempfile
 import time
@@ -10,10 +8,11 @@ from typing import Any
 from langchain.prompts import PromptTemplate
 from pinecone import Pinecone, ServerlessSpec
 from langchain_pinecone import PineconeVectorStore
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.llm.hugging_face_inference_llama3_2 import HuggingFaceInference
 from langchain_huggingface.embeddings import HuggingFaceEndpointEmbeddings
+from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -50,7 +49,7 @@ def hello_world():
     }
 
 @app.post("/upload/")
-async def upload_file(file: UploadFile = File(...)) -> Any:
+async def upload_file(file: UploadFile = File(...), source: str = '') -> Any:
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type.")
     
@@ -61,16 +60,22 @@ async def upload_file(file: UploadFile = File(...)) -> Any:
     #     content = await file.read()  # Read file content
     #     out_file.write(content)  # Save file locally
 
+
     with tempfile.NamedTemporaryFile(delete=True, suffix=".pdf") as temp_file:
 
+        logger.info(f"Starting to load {file_name} into memory")
         temp_file.write(content)
         temp_file.flush() 
 
-        loader = PyPDFLoader(temp_file.name)
-        
-        logger.info(f"Starting to load {file_name} into memory")
+        loader = PyMuPDFLoader(temp_file.name)
+    
 
-        pages = loader.load()
+        if source == '':
+            doc_source = file_name
+        else:
+            doc_source = source
+
+        pages = [Document(page_content=page.page_content.replace("\n", " "), metadata={**page.metadata, "source": doc_source}) for page in loader.load()]
 
         splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=300)
 
@@ -111,7 +116,6 @@ async def upload_file(file: UploadFile = File(...)) -> Any:
             if len(chunks) % 10 != 0:
                 number_of_batches += 1
 
-            # vectorstore = PineconeVectorStore.from_documents(chunks, embeddings, index_name=INDEX_NAME)    
 
             for batch_num, i in enumerate(range(0, len(chunks), 10), start=1):
                 batch = chunks[i:i+10]
@@ -128,6 +132,7 @@ async def upload_file(file: UploadFile = File(...)) -> Any:
 
         finally:
             logger.info(f"Upsert operation completed for Pinecone index: {INDEX_NAME}")
+        temp_file.close()
     
     return {"message": message}
 
@@ -148,15 +153,7 @@ async def test_llm(query: str) -> Any:
             Question: {input}
         """
     prompt = PromptTemplate.from_template(template)
-    # chain = (
-    #     {
-    #         "context": itemgetter("question") | retriever,
-    #         "question": itemgetter("question"),
-    #     }
-    #     | prompt
-    #     | model
-    #     | parser
-    # )
+
     question_answer_chain = create_stuff_documents_chain(model, prompt)
     rag_chain = create_retrieval_chain(retriever, question_answer_chain)
     response = await rag_chain.ainvoke({'input': query})
