@@ -1,3 +1,4 @@
 *.pyc
 .venv*
 memory.db
+docker-compose.yml

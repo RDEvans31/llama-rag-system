@@ -40,7 +40,7 @@ def generate(input: str):
                 "content": input
             }
         ],
-        "max_tokens": 500,
+        "max_tokens": 1000,
         "stream": False
     })
 
