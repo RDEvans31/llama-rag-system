@@ -56,11 +56,6 @@ async def upload_file(file: UploadFile = File(...), source: str = '') -> Any:
     content = await file.read()
     file_name = file.filename
 
-    # with io.open(file_location, 'wb') as out_file:
-    #     content = await file.read()  # Read file content
-    #     out_file.write(content)  # Save file locally
-
-
     with tempfile.NamedTemporaryFile(delete=True, suffix=".pdf") as temp_file:
 
         logger.info(f"Starting to load {file_name} into memory")
